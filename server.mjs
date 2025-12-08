@@ -17,9 +17,9 @@ if (!process.env.OPENAI_API_KEY) {
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+  timeout: 90000, // 90 saniye OpenAI timeout
 });
 
-// Model - gpt-5-nano
 const MODEL_NAME = 'gpt-5-nano';
 
 // ─────────────────────────────────────────────────────────────
@@ -29,40 +29,68 @@ app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 // ─────────────────────────────────────────────────────────────
-// Sistem promptu
+// Sistem Promptu (gerçekçi, nano uyumlu)
 // ─────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `Sen bir gezi planlayıcısısın. Verilen bilgilere göre gezi planı oluştur.
+const SYSTEM_PROMPT = `
+Sen dünya çapında uzman bir gezi planlayıcısısın. Verilen şehir ve kriterlere göre
+**gerçek, ziyaret edilebilir** yerlerden oluşan detaylı ve mantıklı bir gezi planı oluşturursun.
 
-SADECE JSON formatında yanıt ver. Başka hiçbir şey yazma:
+GENEL KURALLAR:
+1. Sadece GERÇEK ve bilinen mekanları seç (müzeler, parklar, restoranlar, anıtlar, kafeler vb.).
+2. Mekan isimleri Google Haritalar'da aratılabilir, sade ve net olmalıdır
+   (ör: "Galata Kulesi", "Topkapı Sarayı", "Dolmabahçe Sarayı").
+3. Her durak için mümkünse tam adres ver (ilçe, mahalle, sokak, numara).
+4. Zaman dilimleri gerçekçi olsun; aynı günde birbirine çok uzak semtler arasında zıplama.
+5. Toplam süre ve bütçe kullanıcı isteğine uygun olsun.
+6. Duraklar, kullanıcının ilgi alanlarına ve kalabalık tercihine göre seçilsin.
+7. Ulaşım bilgisi gerçekçi olsun (yürüyerek mesafeler, toplu taşıma, araç vs.).
 
+KOORDİNAT KURALI:
+- Bir mekanın koordinatlarını GERÇEKTEN biliyorsan "lat" ve "lng" alanlarına yaz.
+- Emin değilsen "lat" ve "lng" alanlarını null bırak. Uydurma koordinat verme.
+
+ÇIKTI FORMATı (SADECE JSON):
 {
-  "summary": "Plan özeti",
+  "id": "unique_id",
+  "createdAt": "2024-01-01T10:00:00Z",
+  "summary": "Planın genel özeti (2-3 cümle)",
   "estimatedTotalCost": 500,
   "currency": "TRY",
   "stops": [
     {
       "timeRange": "09:00 - 10:30",
-      "placeName": "Mekan",
-      "address": "Adres",
-      "description": "Açıklama",
-      "reason": "Neden",
+      "placeName": "Gerçek mekan adı",
+      "address": "Tam sokak adresi, mahalle, ilçe, şehir, ülke",
+      "description": "Mekan hakkında detaylı bilgi (isteğe göre 2-5 cümle)",
+      "reason": "Neden bu mekan seçildi, ilgi alanlarıyla bağlantısı",
       "estimatedCost": 50,
-      "crowd": "az",
-      "transport": "Yürüyerek",
-      "lat": 41.0,
-      "lng": 28.9,
+      "crowd": "az|orta|yoğun",
+      "transport": "Bir önceki duraktan nasıl gidilir (örn: 'Taksim'den 15 dk yürüyüş')",
+      "lat": 41.0082,        // Bilmiyorsan null
+      "lng": 28.9784,        // Bilmiyorsan null
       "rating": 4.5,
-      "ratingCount": 100,
-      "priceLevel": 2,
-      "category": "Kahvaltı",
-      "duration": 90
+      "ratingCount": 1200,
+      "priceLevel": 2,       // 1: ucuz, 4: pahalı
+      "category": "Kahvaltı|Müze|Park|Restoran|Kafe|Alışveriş|Gece Hayatı",
+      "duration": 90         // dakika cinsinden süre
     }
   ],
-  "tips": ["İpucu 1"]
-}`;
+  "tips": [
+    "Pratik öneri 1",
+    "Pratik öneri 2"
+  ]
+}
+
+ÖNEMLİ NOTLAR:
+- İstanbul için: Sultanahmet, Taksim, Beşiktaş, Kadıköy gibi gerçek semtler kullan.
+- Paris için: Eiffel Kulesi, Louvre, Montmartre gibi gerçek yerler.
+- "lat" ve "lng" bilmediğin yerlerde null olmalı; uydurma koordinat verme.
+- Her durak en az 60, en fazla 180 dakika sürmeli.
+- Duraklar arası ulaşım mantıklı ve süre olarak gerçekçi olmalı.
+`;
 
 // ─────────────────────────────────────────────────────────────
-// Prompt builder
+// Prompt Builder
 // ─────────────────────────────────────────────────────────────
 function buildPrompt(body) {
   const {
@@ -76,38 +104,74 @@ function buildPrompt(body) {
     mobility = 'walk',
     specialRequest = '',
     language = 'tr',
+    qualityMode = 'detailed', // 'fast' | 'detailed' | 'ultra'
   } = body || {};
 
-  const interestsText = Array.isArray(interests) ? interests.join(', ') : interests;
+  const interestsText = Array.isArray(interests)
+    ? interests.join(', ')
+    : interests;
 
-  return `Şehir: ${city}
-Tarih: ${date}
-Süre: ${hours} saat (${startTime}'dan başla)
-Bütçe: ${budget} TL
-İlgi alanları: ${interestsText || 'Genel'}
-Kalabalık: ${crowdPreference}
-Ulaşım: ${mobility}
-${specialRequest ? `Özel istek: ${specialRequest}` : ''}
-Dil: ${language === 'en' ? 'İngilizce' : 'Türkçe'}
+  const mobilityMap = {
+    walk: 'yürüyerek (mesafeler kısa olsun)',
+    public: 'toplu taşıma (metro, tramvay, otobüs)',
+    taxi: 'taksi/özel araç',
+  };
 
-3-5 durak içeren plan oluştur. SADECE JSON döndür.`;
+  const crowdMap = {
+    avoid: 'kalabalık yerlerden kaçın, daha sakin yerler seç',
+    prefer: 'canlı ve kalabalık yerleri tercih et',
+    any: 'kalabalık konusunda özel bir tercih yok',
+  };
+
+  const isEnglish = language === 'en';
+  const langLabel = isEnglish ? 'English' : 'Turkish';
+
+  const isDetailed = qualityMode === 'detailed' || qualityMode === 'ultra';
+
+  return `
+City / Şehir: ${city}
+Date / Tarih: ${date}
+Total duration / Toplam süre: ${hours} saat (start / başlangıç: ${startTime})
+Budget / Bütçe: ${budget} ${body.currency || 'TRY'}
+Interests / İlgi alanları: ${
+    interestsText || (isEnglish ? 'General tourism' : 'Genel gezi')
+  }
+Crowd preference / Kalabalık tercihi: ${
+    crowdMap[crowdPreference] || crowdPreference
+  }
+Mobility / Ulaşım: ${mobilityMap[mobility] || mobility}
+Special request / Özel istek: ${specialRequest || '-'}
+
+REQUIREMENTS / GEREKSİNİMLER:
+- 3 ile 5 arasında durak oluştur.
+- Duraklar birbirine coğrafi olarak mantıklı bir güzergâh oluştursun.
+- Kullanıcının ilgi alanları ve kalabalık tercihini dikkate al.
+- Bütçeyi aşma; her durak için tahmini maliyet belirt.
+- ${
+    isDetailed
+      ? 'Her durak için en az 3-4 cümle açıklama yaz, ipuçlarını detaylı ver.'
+      : 'Her durak için kısa açıklamalar yaz (1-2 cümle), ipuçlarını kısa tut.'
+  }
+
+RESPONSE LANGUAGE / YANIT DİLİ: ${langLabel}
+
+SADECE GEÇERLİ JSON DÖNDÜR, BAŞKA HİÇBİR METİN EKLEME.
+`;
 }
 
 // ─────────────────────────────────────────────────────────────
-// JSON çıkarma fonksiyonu
+// JSON çıkarma (geliştirilmiş)
 // ─────────────────────────────────────────────────────────────
 function extractJsonFromText(text) {
   if (!text || typeof text !== 'string') return null;
 
-  // 1. Direkt parse dene
+  // 1. Direkt parse
   try {
     return JSON.parse(text);
   } catch (e) {}
 
-  // 2. Temizle ve dene
+  // 2. Markdown temizle
   let cleaned = text.trim();
-
-  // Markdown code block temizle
   cleaned = cleaned.replace(/^```json\s*/i, '');
   cleaned = cleaned.replace(/^```\s*/i, '');
   cleaned = cleaned.replace(/\s*```$/i, '');
@@ -117,11 +181,12 @@ function extractJsonFromText(text) {
     return JSON.parse(cleaned);
   } catch (e) {}
 
-  // 3. Regex ile JSON bul
-  const match = cleaned.match(/\{[\s\S]*\}/);
-  if (match) {
+  // 3. Regex ile en büyük JSON objesini bul
+  const matches = cleaned.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}/g);
+  if (matches && matches.length > 0) {
+    const longest = matches.reduce((a, b) => (a.length > b.length ? a : b));
     try {
-      return JSON.parse(match[0]);
+      return JSON.parse(longest);
     } catch (e) {}
   }
 
@@ -129,97 +194,139 @@ function extractJsonFromText(text) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// OpenAI API çağrısı
+// Plan validasyonu ve normalize etme
 // ─────────────────────────────────────────────────────────────
-async function callOpenAI(userPrompt) {
-  console.log('\n📤 OpenAI isteği gönderiliyor...');
+function validateAndFixPlan(plan) {
+  if (!plan || typeof plan !== 'object') {
+    throw new Error('Geçersiz plan formatı');
+  }
+
+  plan.id = plan.id || `plan_${Date.now()}`;
+  plan.createdAt = plan.createdAt || new Date().toISOString();
+  plan.currency = plan.currency || 'TRY';
+  plan.summary = plan.summary || 'Gezi planı';
+  plan.estimatedTotalCost = plan.estimatedTotalCost || 0;
+  plan.tips = Array.isArray(plan.tips) ? plan.tips : [];
+  plan.stops = Array.isArray(plan.stops) ? plan.stops : [];
+  plan.language = plan.language || 'tr';
+
+  plan.stops = plan.stops.map((stop, index) => {
+    if (!stop || typeof stop !== 'object') {
+      stop = {};
+    }
+
+    let lat = stop.lat;
+    let lng = stop.lng;
+
+    // Geçerli sayı değilse null yap
+    if (typeof lat !== 'number') {
+      lat = null;
+    }
+    if (typeof lng !== 'number') {
+      lng = null;
+    }
+
+    return {
+      timeRange: stop.timeRange || '09:00 - 10:00',
+      placeName: stop.placeName || `Durak ${index + 1}`,
+      address: stop.address || '',
+      description: stop.description || '',
+      reason: stop.reason || '',
+      estimatedCost:
+        typeof stop.estimatedCost === 'number' ? stop.estimatedCost : 0,
+      crowd: stop.crowd || 'orta',
+      transport: stop.transport || '',
+      lat,
+      lng,
+      rating: typeof stop.rating === 'number' ? stop.rating : 0,
+      ratingCount:
+        typeof stop.ratingCount === 'number' ? stop.ratingCount : 0,
+      priceLevel:
+        typeof stop.priceLevel === 'number' ? stop.priceLevel : 1,
+      category: stop.category || 'Genel',
+      duration: typeof stop.duration === 'number' ? stop.duration : 60,
+    };
+  });
+
+  return plan;
+}
+
+// ─────────────────────────────────────────────────────────────
+// OpenAI çağrısı (retry + logging)
+// ─────────────────────────────────────────────────────────────
+async function callOpenAI(userPrompt, retryCount = 0) {
+  console.log(
+    `\n📤 OpenAI isteği gönderiliyor... (Deneme: ${retryCount + 1}/3)`,
+  );
   console.log('📦 Model:', MODEL_NAME);
 
-  let rawResponse;
-
   try {
-    // temperature ve max_tokens gönderME
-    rawResponse = await client.chat.completions.create({
+    const response = await client.chat.completions.create({
       model: MODEL_NAME,
       response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
+      temperature: 0.55, // Daha tutarlı ama hala yaratıcı
+      max_tokens: 1200, // 3–5 duraklı detaylı plan için yeterli
     });
 
-    console.log('📥 Ham yanıt alındı');
-  } catch (apiError) {
-    console.error('❌ OpenAI API hatası:', apiError.message);
-    console.error('❌ Hata tipi:', apiError.constructor.name);
-    console.error('❌ Status:', apiError.status);
-    console.error('❌ Code:', apiError.code);
+    console.log('📥 Yanıt alındı');
+    console.log('   - Model:', response?.model);
+    console.log('   - Usage:', JSON.stringify(response?.usage));
+    console.log('   - Finish reason:', response?.choices?.[0]?.finish_reason);
 
-    if (apiError.error) {
-      console.error('❌ Error body:', JSON.stringify(apiError.error, null, 2));
+    const content = response?.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error('OpenAI yanıtında içerik yok');
     }
 
-    throw new Error(`OpenAI API hatası: ${apiError.message}`);
+    console.log('   - Content length:', content.length);
+    return content;
+  } catch (apiError) {
+    console.error('❌ OpenAI hatası:', apiError.message);
+
+    // Geçici hatalarda retry
+    if (
+      retryCount < 2 &&
+      (apiError.status === 429 || apiError.status === 503)
+    ) {
+      const waitTime = (retryCount + 1) * 2000; // 2s, 4s
+      console.log(`⏳ ${waitTime}ms bekleyip tekrar denenecek...`);
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
+      return callOpenAI(userPrompt, retryCount + 1);
+    }
+
+    throw new Error(`OpenAI hatası: ${apiError.message}`);
   }
-
-  // Yanıtı incele
-  console.log('🔍 Yanıt yapısı:');
-  console.log('   - id:', rawResponse?.id);
-  console.log('   - model:', rawResponse?.model);
-  console.log('   - choices length:', rawResponse?.choices?.length);
-
-  if (rawResponse?.usage) {
-    console.log('   - tokens:', JSON.stringify(rawResponse.usage));
-  }
-
-  const choice = rawResponse?.choices?.[0];
-  if (!choice) {
-    console.error('❌ Choices boş:', JSON.stringify(rawResponse, null, 2));
-    throw new Error('OpenAI yanıtında choices bulunamadı');
-  }
-
-  console.log('   - finish_reason:', choice.finish_reason);
-
-  const content = choice.message?.content;
-  console.log('   - content type:', typeof content);
-  console.log('   - content length:', content?.length);
-
-  if (!content) {
-    console.error('❌ Content boş. Tam yanıt:', JSON.stringify(rawResponse, null, 2));
-    throw new Error('OpenAI yanıtında content boş');
-  }
-
-  // Content'i logla (ilk 1000 karakter)
-  console.log('📄 Content preview:', content.substring(0, 1000));
-
-  return content;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Plan oluşturma
+// Plan oluşturma (ana fonksiyon)
 // ─────────────────────────────────────────────────────────────
 async function createPlan(userPrompt) {
   const content = await callOpenAI(userPrompt);
-
-  // JSON parse
   const plan = extractJsonFromText(content);
 
-  if (!plan || typeof plan !== 'object') {
+  if (!plan) {
     console.error('❌ JSON parse başarısız');
-    console.error('❌ Alınan content:', content);
+    console.error('Content (first 500):', content?.substring(0, 500));
     throw new Error('Geçerli JSON alınamadı');
   }
 
-  // Varsayılan alanları ekle
-  plan.id = plan.id || Date.now().toString();
-  plan.createdAt = plan.createdAt || new Date().toISOString();
-  plan.currency = plan.currency || 'TRY';
-  plan.stops = Array.isArray(plan.stops) ? plan.stops : [];
-  plan.tips = Array.isArray(plan.tips) ? plan.tips : [];
+  const validatedPlan = validateAndFixPlan(plan);
 
-  console.log('✅ Plan hazır. Durak sayısı:', plan.stops.length);
+  console.log('✅ Plan hazır');
+  console.log(`   - Durak sayısı: ${validatedPlan.stops.length}`);
+  console.log(
+    `   - Toplam maliyet: ${validatedPlan.estimatedTotalCost} ${validatedPlan.currency}`,
+  );
+  if (validatedPlan.stops[0]) {
+    console.log(`   - İlk durak: ${validatedPlan.stops[0].placeName}`);
+  }
 
-  return plan;
+  return validatedPlan;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -228,18 +335,23 @@ async function createPlan(userPrompt) {
 
 // POST /api/plan
 app.post('/api/plan', async (req, res) => {
-  console.log('\n' + '═'.repeat(50));
+  const startTime = Date.now();
+  console.log('\n' + '═'.repeat(60));
   console.log('📍 POST /api/plan');
-  console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+  console.log('📦 Request:', JSON.stringify(req.body, null, 2));
 
   try {
     const prompt = buildPrompt(req.body);
     const plan = await createPlan(prompt);
 
-    console.log('✅ Yanıt gönderiliyor');
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`✅ Plan oluşturuldu (${duration}s)`);
+
     res.json(plan);
   } catch (err) {
-    console.error('❌ Hata:', err.message);
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.error(`❌ Hata (${duration}s):`, err.message);
+
     res.status(500).json({
       error: 'Plan oluşturulamadı',
       detail: err.message,
@@ -247,9 +359,10 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
-// POST /api/plan/chat
+// POST /api/plan/chat (revize)
 app.post('/api/plan/chat', async (req, res) => {
-  console.log('\n' + '═'.repeat(50));
+  const startTime = Date.now();
+  console.log('\n' + '═'.repeat(60));
   console.log('📍 POST /api/plan/chat');
 
   try {
@@ -262,17 +375,34 @@ app.post('/api/plan/chat', async (req, res) => {
       });
     }
 
-    const prompt = `Mevcut plan:
+    const language = plan.language || 'tr';
+    const isEnglish = language === 'en';
+
+    const prompt = `${
+      isEnglish ? 'Current plan' : 'Mevcut plan'
+    }:
 ${JSON.stringify(plan, null, 2)}
 
-Kullanıcı: ${message}
+${isEnglish ? 'User request' : 'Kullanıcı isteği'}: ${message}
 
-Planı güncelle. SADECE JSON döndür.`;
+${
+  isEnglish
+    ? 'UPDATE the plan based on the request. Keep real places, realistic times and budget. Do not change the general structure too much.'
+    : 'Planı kullanıcı isteğine göre GÜNCELLE. Gerçek yerleri, gerçekçi süreleri ve bütçeyi koru. Genel yapıyı çok bozma.'
+}
+
+${isEnglish ? 'Return ONLY JSON.' : 'SADECE JSON döndür.'}`;
 
     const newPlan = await createPlan(prompt);
+
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`✅ Plan güncellendi (${duration}s)`);
+
     res.json(newPlan);
   } catch (err) {
-    console.error('❌ Hata:', err.message);
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.error(`❌ Hata (${duration}s):`, err.message);
+
     res.status(500).json({
       error: 'Plan güncellenemedi',
       detail: err.message,
@@ -280,19 +410,19 @@ Planı güncelle. SADECE JSON döndür.`;
   }
 });
 
-// GET /api/test - Basit test
+// GET /api/test
 app.get('/api/test', async (_req, res) => {
-  console.log('\n' + '═'.repeat(50));
+  console.log('\n' + '═'.repeat(60));
   console.log('🧪 GET /api/test');
 
   try {
     const response = await client.chat.completions.create({
       model: MODEL_NAME,
-      messages: [{ role: 'user', content: 'Sadece "Merhaba!" yaz.' }],
+      messages: [{ role: 'user', content: 'Test: Sadece "OK" yaz.' }],
     });
 
     const content = response.choices?.[0]?.message?.content;
-    console.log('✅ Test yanıtı:', content);
+    console.log('✅ Test başarılı:', content);
 
     res.json({
       success: true,
@@ -302,53 +432,9 @@ app.get('/api/test', async (_req, res) => {
     });
   } catch (err) {
     console.error('❌ Test hatası:', err.message);
-    console.error('❌ Detay:', JSON.stringify(err, null, 2));
-
     res.status(500).json({
       success: false,
       error: err.message,
-      details: err.error || null,
-    });
-  }
-});
-
-// GET /api/raw-test - Ham API yanıtını göster
-app.get('/api/raw-test', async (_req, res) => {
-  console.log('\n' + '═'.repeat(50));
-  console.log('🧪 GET /api/raw-test');
-
-  try {
-    const response = await client.chat.completions.create({
-      model: MODEL_NAME,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content:
-            'Sadece JSON döndür: {"test": true, "message": "hello"}',
-        },
-        { role: 'user', content: 'Test JSON döndür' },
-      ],
-    });
-
-    console.log('📥 Ham yanıt:', JSON.stringify(response, null, 2));
-
-    res.json({
-      success: true,
-      raw_response: response,
-    });
-  } catch (err) {
-    console.error('❌ Raw test hatası:', err.message);
-
-    res.status(500).json({
-      success: false,
-      error: err.message,
-      error_type: err.constructor.name,
-      error_details: {
-        status: err.status,
-        code: err.code,
-        body: err.error,
-      },
     });
   }
 });
@@ -356,9 +442,26 @@ app.get('/api/raw-test', async (_req, res) => {
 // GET /
 app.get('/', (_req, res) => {
   res.json({
-    status: 'running',
+    status: 'online',
     model: MODEL_NAME,
-    endpoints: ['/api/plan', '/api/plan/chat', '/api/test', '/api/raw-test'],
+    version: '2.0',
+    endpoints: {
+      plan: 'POST /api/plan',
+      chat: 'POST /api/plan/chat',
+      test: 'GET /api/test',
+    },
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// Error handling middleware
+// ─────────────────────────────────────────────────────────────
+app.use((err, _req, res, _next) => {
+  console.error('💥 Unhandled error:', err);
+  res.status(500).json({
+    error: 'Sunucu hatası',
+    detail:
+      process.env.NODE_ENV === 'development' ? err.message : undefined,
   });
 });
 
@@ -366,10 +469,10 @@ app.get('/', (_req, res) => {
 // Start
 // ─────────────────────────────────────────────────────────────
 app.listen(port, () => {
-  console.log('═'.repeat(50));
-  console.log(`✅ Backend: http://localhost:${port}`);
+  console.log('═'.repeat(60));
+  console.log('✅ TripPlan Backend v2.0');
+  console.log(`🌐 Server: http://localhost:${port}`);
   console.log(`📦 Model: ${MODEL_NAME}`);
-  console.log(`🧪 Test: http://localhost:${port}/api/test`);
-  console.log(`🔬 Raw test: http://localhost:${port}/api/raw-test`);
-  console.log('═'.repeat(50));
+  console.log('🧪 Test:  GET /api/test');
+  console.log('═'.repeat(60));
 });
