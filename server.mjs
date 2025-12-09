@@ -1,4 +1,4 @@
-// server.mjs - COMPLETE ULTIMATE PRODUCTION VERSION v3.1 (no manual max tokens)
+// server.mjs - COMPLETE ULTIMATE PRODUCTION VERSION v3.2 (no manual timeout)
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -11,7 +11,7 @@ const port = process.env.PORT || 3000;
 // CONFIGURATION
 // ═══════════════════════════════════════════════════════════════
 const MODEL_NAME = 'gpt-5-nano';
-const OPENAI_TIMEOUT = 90000; // 90 saniye
+// Artık manuel timeout yok → SDK varsayılanını kullanıyoruz
 const JSON_SIZE_LIMIT = '2mb';
 
 // ═══════════════════════════════════════════════════════════════
@@ -25,7 +25,7 @@ if (!process.env.OPENAI_API_KEY) {
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  timeout: OPENAI_TIMEOUT,
+  // timeout parametresi kaldırıldı → SDK default timeout
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -294,6 +294,7 @@ async function callOpenAI(userPrompt, retryCount = 0) {
         { role: 'user', content: userPrompt },
       ],
       // DİKKAT: max_completion_tokens GÖNDERİLMİYOR (Numara Kalkanı ile aynı mantık)
+      // DİKKAT: timeout da GÖNDERİLMİYOR → SDK default
     });
 
     const duration = ((Date.now() - callStartTime) / 1000).toFixed(2);
@@ -496,14 +497,14 @@ app.get('/api/health', (_req, res) => {
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
     model: MODEL_NAME,
-    version: '3.1',
+    version: '3.2',
     memory: {
       heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024) + ' MB',
       heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024) + ' MB',
       rss: Math.round(memUsage.rss / 1024 / 1024) + ' MB',
     },
     config: {
-      timeout: OPENAI_TIMEOUT / 1000 + 's',
+      timeout: 'sdk_default',
       jsonLimit: JSON_SIZE_LIMIT,
     },
   });
@@ -512,7 +513,7 @@ app.get('/api/health', (_req, res) => {
 app.get('/', (_req, res) => {
   res.json({
     name: 'TripPlan API',
-    version: '3.1 - Ultimate Production (no manual max tokens)',
+    version: '3.2 - Ultimate Production (no manual timeout)',
     status: 'online',
     model: MODEL_NAME,
     features: {
@@ -570,11 +571,11 @@ app.use((err, _req, res, _next) => {
 // SERVER START
 app.listen(port, () => {
   console.log('\n' + '═'.repeat(60));
-  console.log('✅ TripPlan Backend v3.1 - ULTIMATE PRODUCTION (no manual max tokens)');
+  console.log('✅ TripPlan Backend v3.2 - ULTIMATE PRODUCTION (no manual timeout)');
   console.log('═'.repeat(60));
   console.log(`🌐 Server       : http://localhost:${port}`);
   console.log(`📦 Model        : ${MODEL_NAME}`);
-  console.log(`⏱️  Timeout      : ${OPENAI_TIMEOUT / 1000}s`);
+  console.log('⏱️  Timeout      : sdk_default (no manual limit)');
   console.log(`📊 JSON Limit   : ${JSON_SIZE_LIMIT}`);
   console.log('═'.repeat(60));
   console.log('📍 Endpoints:');
