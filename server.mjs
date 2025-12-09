@@ -165,12 +165,10 @@ SADECE GEÇERLİ JSON DÖNDÜR, BAŞKA HİÇBİR METİN EKLEME.
 function extractJsonFromText(text) {
   if (!text || typeof text !== 'string') return null;
 
-  // 1. Direkt parse
   try {
     return JSON.parse(text);
   } catch (e) {}
 
-  // 2. Markdown temizle
   let cleaned = text.trim();
   cleaned = cleaned.replace(/^```json\s*/i, '');
   cleaned = cleaned.replace(/^```\s*/i, '');
@@ -181,7 +179,6 @@ function extractJsonFromText(text) {
     return JSON.parse(cleaned);
   } catch (e) {}
 
-  // 3. Regex ile en büyük JSON objesini bul
   const matches = cleaned.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}/g);
   if (matches && matches.length > 0) {
     const longest = matches.reduce((a, b) => (a.length > b.length ? a : b));
@@ -218,7 +215,6 @@ function validateAndFixPlan(plan) {
     let lat = stop.lat;
     let lng = stop.lng;
 
-    // Geçerli sayı değilse null yap
     if (typeof lat !== 'number') {
       lat = null;
     }
@@ -252,11 +248,11 @@ function validateAndFixPlan(plan) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// OpenAI çağrısı (retry + logging)
+// OpenAI çağrısı (retry + logging, max_tokens: 10000)
 // ─────────────────────────────────────────────────────────────
 async function callOpenAI(userPrompt, retryCount = 0) {
   console.log(
-    `\n📤 OpenAI isteği gönderiliyor... (Deneme: ${retryCount + 1}/3)`,
+    `\n📤 OpenAI isteği gönderiliyor... (Deneme: ${retryCount + 1}/3)`
   );
   console.log('📦 Model:', MODEL_NAME);
 
@@ -268,8 +264,8 @@ async function callOpenAI(userPrompt, retryCount = 0) {
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.55, // Daha tutarlı ama hala yaratıcı
-      max_tokens: 1200, // 3–5 duraklı detaylı plan için yeterli
+      temperature: 0.55,
+      max_tokens: 10000, // ⬅️ BURAYI YÜKSELTTİK
     });
 
     console.log('📥 Yanıt alındı');
@@ -287,12 +283,11 @@ async function callOpenAI(userPrompt, retryCount = 0) {
   } catch (apiError) {
     console.error('❌ OpenAI hatası:', apiError.message);
 
-    // Geçici hatalarda retry
     if (
       retryCount < 2 &&
       (apiError.status === 429 || apiError.status === 503)
     ) {
-      const waitTime = (retryCount + 1) * 2000; // 2s, 4s
+      const waitTime = (retryCount + 1) * 2000;
       console.log(`⏳ ${waitTime}ms bekleyip tekrar denenecek...`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
       return callOpenAI(userPrompt, retryCount + 1);
@@ -320,7 +315,7 @@ async function createPlan(userPrompt) {
   console.log('✅ Plan hazır');
   console.log(`   - Durak sayısı: ${validatedPlan.stops.length}`);
   console.log(
-    `   - Toplam maliyet: ${validatedPlan.estimatedTotalCost} ${validatedPlan.currency}`,
+    `   - Toplam maliyet: ${validatedPlan.estimatedTotalCost} ${validatedPlan.currency}`
   );
   if (validatedPlan.stops[0]) {
     console.log(`   - İlk durak: ${validatedPlan.stops[0].placeName}`);
@@ -332,8 +327,6 @@ async function createPlan(userPrompt) {
 // ─────────────────────────────────────────────────────────────
 // Routes
 // ─────────────────────────────────────────────────────────────
-
-// POST /api/plan
 app.post('/api/plan', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
@@ -359,7 +352,6 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
-// POST /api/plan/chat (revize)
 app.post('/api/plan/chat', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
@@ -410,7 +402,6 @@ ${isEnglish ? 'Return ONLY JSON.' : 'SADECE JSON döndür.'}`;
   }
 });
 
-// GET /api/test
 app.get('/api/test', async (_req, res) => {
   console.log('\n' + '═'.repeat(60));
   console.log('🧪 GET /api/test');
@@ -439,7 +430,6 @@ app.get('/api/test', async (_req, res) => {
   }
 });
 
-// GET /
 app.get('/', (_req, res) => {
   res.json({
     status: 'online',
