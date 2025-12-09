@@ -281,13 +281,16 @@ function validateAndFixPlan(plan) {
  * GPT-5-nano UYUMLU
  */
 async function callOpenAI(userPrompt, retryCount = 0) {
+  const callStartTime = Date.now();
   console.log(
     `\n📤 OpenAI isteği gönderiliyor... (Deneme: ${retryCount + 1}/3)`,
   );
   console.log('📦 Model:', MODEL_NAME);
   console.log('🎯 Max tokens:', MAX_COMPLETION_TOKENS);
+  console.log('⏰ Başlangıç zamanı:', new Date().toISOString());
 
   try {
+    console.log('🔄 OpenAI API çağrısı yapılıyor...');
     const response = await client.chat.completions.create({
       model: MODEL_NAME,
       response_format: { type: 'json_object' },
@@ -304,7 +307,8 @@ async function callOpenAI(userPrompt, retryCount = 0) {
       // - frequency_penalty
     });
 
-    console.log('📥 Yanıt alındı');
+    const duration = ((Date.now() - callStartTime) / 1000).toFixed(2);
+    console.log(`📥 Yanıt alındı (${duration}s)`);
     console.log('   - Model:', response?.model);
     console.log('   - Usage:', JSON.stringify(response?.usage));
     console.log('   - Finish reason:', response?.choices?.[0]?.finish_reason);
@@ -325,7 +329,8 @@ async function callOpenAI(userPrompt, retryCount = 0) {
     console.log('   - Content length:', content.length, 'chars');
     return content;
   } catch (apiError) {
-    console.error('❌ OpenAI hatası:', apiError.message);
+    const duration = ((Date.now() - callStartTime) / 1000).toFixed(2);
+    console.error(`❌ OpenAI hatası (${duration}s):`, apiError.message);
     console.error('   - Status:', apiError.status);
     console.error('   - Code:', apiError.code);
     console.error('   - Type:', apiError.type);
@@ -498,6 +503,18 @@ app.get('/api/test', async (_req, res) => {
       error: err.message,
     });
   }
+});
+
+/**
+ * GET /api/warmup
+ * Backend'i uyandırmak için lightweight endpoint
+ */
+app.get('/api/warmup', (_req, res) => {
+  res.json({
+    status: 'awake',
+    timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime()),
+  });
 });
 
 /**
