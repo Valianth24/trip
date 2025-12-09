@@ -7,6 +7,8 @@ import OpenAI from 'openai';
 const app = express();
 const port = process.env.PORT || 3000;
 
+const MAX_COMPLETION_TOKENS = 10000;
+
 // ─────────────────────────────────────────────────────────────
 // OpenAI client
 // ─────────────────────────────────────────────────────────────
@@ -29,7 +31,7 @@ app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
 // ─────────────────────────────────────────────────────────────
-// Sistem Promptu (gerçekçi, nano uyumlu)
+// Sistem Promptu
 // ─────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `
 Sen dünya çapında uzman bir gezi planlayıcısısın. Verilen şehir ve kriterlere göre
@@ -104,7 +106,7 @@ function buildPrompt(body) {
     mobility = 'walk',
     specialRequest = '',
     language = 'tr',
-    qualityMode = 'detailed', // 'fast' | 'detailed' | 'ultra'
+    qualityMode = 'detailed',
   } = body || {};
 
   const interestsText = Array.isArray(interests)
@@ -160,7 +162,7 @@ SADECE GEÇERLİ JSON DÖNDÜR, BAŞKA HİÇBİR METİN EKLEME.
 }
 
 // ─────────────────────────────────────────────────────────────
-// JSON çıkarma (geliştirilmiş)
+// JSON çıkarma
 // ─────────────────────────────────────────────────────────────
 function extractJsonFromText(text) {
   if (!text || typeof text !== 'string') return null;
@@ -264,9 +266,7 @@ async function callOpenAI(userPrompt, retryCount = 0) {
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.55,
-      // 🔥 BURASI DEĞİŞTİ: max_tokens yerine max_completion_tokens
-      max_completion_tokens: 10000,
+      max_completion_tokens: MAX_COMPLETION_TOKENS,
     });
 
     console.log('📥 Yanıt alındı');
@@ -328,8 +328,6 @@ async function createPlan(userPrompt) {
 // ─────────────────────────────────────────────────────────────
 // Routes
 // ─────────────────────────────────────────────────────────────
-
-// POST /api/plan
 app.post('/api/plan', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
@@ -355,7 +353,6 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
-// POST /api/plan/chat (revize)
 app.post('/api/plan/chat', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
@@ -406,7 +403,6 @@ ${isEnglish ? 'Return ONLY JSON.' : 'SADECE JSON döndür.'}`;
   }
 });
 
-// GET /api/test
 app.get('/api/test', async (_req, res) => {
   console.log('\n' + '═'.repeat(60));
   console.log('🧪 GET /api/test');
@@ -435,7 +431,6 @@ app.get('/api/test', async (_req, res) => {
   }
 });
 
-// GET /
 app.get('/', (_req, res) => {
   res.json({
     status: 'online',
@@ -449,9 +444,6 @@ app.get('/', (_req, res) => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────
-// Error handling middleware
-// ─────────────────────────────────────────────────────────────
 app.use((err, _req, res, _next) => {
   console.error('💥 Unhandled error:', err);
   res.status(500).json({
@@ -461,9 +453,6 @@ app.use((err, _req, res, _next) => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────
-// Start
-// ─────────────────────────────────────────────────────────────
 app.listen(port, () => {
   console.log('═'.repeat(60));
   console.log('✅ TripPlan Backend v2.0');
