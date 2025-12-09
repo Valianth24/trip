@@ -1,4 +1,4 @@
-// server.mjs - COMPLETE ULTIMATE PRODUCTION VERSION v3.0
+// server.mjs - COMPLETE ULTIMATE PRODUCTION VERSION v3.1 (no manual max tokens)
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -11,7 +11,6 @@ const port = process.env.PORT || 3000;
 // CONFIGURATION
 // ═══════════════════════════════════════════════════════════════
 const MODEL_NAME = 'gpt-5-nano';
-const MAX_COMPLETION_TOKENS = 8000; // Optimal: Yeterli ama fazla değil
 const OPENAI_TIMEOUT = 90000; // 90 saniye
 const JSON_SIZE_LIMIT = '2mb';
 
@@ -225,10 +224,6 @@ function validateAndFixPlan(plan) {
     let lng = stop.lng;
 
     // ROBUST koordinat validasyonu
-    // - Sayı olmalı
-    // - 0 olmamalı (geçersiz koordinat)
-    // - NaN veya Infinity olmamalı
-    // - Geçerli range'de olmalı (-90/90, -180/180)
     if (
       typeof lat !== 'number' ||
       lat === 0 ||
@@ -278,7 +273,7 @@ function validateAndFixPlan(plan) {
 
 /**
  * OpenAI API çağrısı (retry + logging)
- * GPT-5-nano UYUMLU
+ * GPT-5-nano UYUMLU – token limiti gönderilmiyor (default)
  */
 async function callOpenAI(userPrompt, retryCount = 0) {
   const callStartTime = Date.now();
@@ -286,7 +281,7 @@ async function callOpenAI(userPrompt, retryCount = 0) {
     `\n📤 OpenAI isteği gönderiliyor... (Deneme: ${retryCount + 1}/3)`,
   );
   console.log('📦 Model:', MODEL_NAME);
-  console.log('🎯 Max tokens:', MAX_COMPLETION_TOKENS);
+  console.log('🎯 Max tokens: default (OpenAI)');
   console.log('⏰ Başlangıç zamanı:', new Date().toISOString());
 
   try {
@@ -298,13 +293,7 @@ async function callOpenAI(userPrompt, retryCount = 0) {
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
-      max_completion_tokens: MAX_COMPLETION_TOKENS,
-      // NOT: GPT-5-nano aşağıdaki parametreleri desteklemiyor:
-      // - reasoning (sadece GPT-5 full/mini)
-      // - temperature (sadece default 1)
-      // - top_p
-      // - presence_penalty
-      // - frequency_penalty
+      // DİKKAT: max_completion_tokens GÖNDERİLMİYOR (Numara Kalkanı ile aynı mantık)
     });
 
     const duration = ((Date.now() - callStartTime) / 1000).toFixed(2);
@@ -313,7 +302,6 @@ async function callOpenAI(userPrompt, retryCount = 0) {
     console.log('   - Usage:', JSON.stringify(response?.usage));
     console.log('   - Finish reason:', response?.choices?.[0]?.finish_reason);
 
-    // Reasoning tokens detayı varsa göster (GPT-5 full/mini için)
     if (response?.usage?.completion_tokens_details) {
       const details = response.usage.completion_tokens_details;
       if (details.reasoning_tokens) {
@@ -335,12 +323,11 @@ async function callOpenAI(userPrompt, retryCount = 0) {
     console.error('   - Code:', apiError.code);
     console.error('   - Type:', apiError.type);
 
-    // Geçici hatalarda retry (429: rate limit, 503: service unavailable)
     if (
       retryCount < 2 &&
       (apiError.status === 429 || apiError.status === 503)
     ) {
-      const waitTime = (retryCount + 1) * 2000; // 2s, 4s
+      const waitTime = (retryCount + 1) * 2000;
       console.log(`⏳ ${waitTime}ms bekleyip tekrar denenecek...`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
       return callOpenAI(userPrompt, retryCount + 1);
@@ -381,10 +368,6 @@ async function createPlan(userPrompt) {
 // API ROUTES
 // ═══════════════════════════════════════════════════════════════
 
-/**
- * POST /api/plan
- * Yeni plan oluşturur
- */
 app.post('/api/plan', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
@@ -412,10 +395,6 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
-/**
- * POST /api/plan/chat
- * Mevcut planı günceller
- */
 app.post('/api/plan/chat', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
@@ -469,10 +448,6 @@ ${isEnglish ? 'Return ONLY JSON.' : 'SADECE JSON döndür.'}`;
   }
 });
 
-/**
- * GET /api/test
- * OpenAI bağlantısını test eder
- */
 app.get('/api/test', async (_req, res) => {
   console.log('\n' + '═'.repeat(60));
   console.log('🧪 GET /api/test');
@@ -481,7 +456,7 @@ app.get('/api/test', async (_req, res) => {
     const response = await client.chat.completions.create({
       model: MODEL_NAME,
       messages: [{ role: 'user', content: 'Test: Sadece "OK" yaz.' }],
-      max_completion_tokens: 100,
+      // max_completion_tokens gönderilmiyor – default
     });
 
     const content = response.choices?.[0]?.message?.content;
@@ -505,10 +480,6 @@ app.get('/api/test', async (_req, res) => {
   }
 });
 
-/**
- * GET /api/warmup
- * Backend'i uyandırmak için lightweight endpoint
- */
 app.get('/api/warmup', (_req, res) => {
   res.json({
     status: 'awake',
@@ -517,10 +488,6 @@ app.get('/api/warmup', (_req, res) => {
   });
 });
 
-/**
- * GET /api/health
- * Sunucu sağlık durumunu kontrol eder
- */
 app.get('/api/health', (_req, res) => {
   const memUsage = process.memoryUsage();
 
@@ -529,33 +496,27 @@ app.get('/api/health', (_req, res) => {
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
     model: MODEL_NAME,
-    version: '3.0',
+    version: '3.1',
     memory: {
       heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024) + ' MB',
       heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024) + ' MB',
       rss: Math.round(memUsage.rss / 1024 / 1024) + ' MB',
     },
     config: {
-      maxCompletionTokens: MAX_COMPLETION_TOKENS,
       timeout: OPENAI_TIMEOUT / 1000 + 's',
       jsonLimit: JSON_SIZE_LIMIT,
     },
   });
 });
 
-/**
- * GET /
- * API bilgilerini döndürür
- */
 app.get('/', (_req, res) => {
   res.json({
     name: 'TripPlan API',
-    version: '3.0 - Ultimate Production',
+    version: '3.1 - Ultimate Production (no manual max tokens)',
     status: 'online',
     model: MODEL_NAME,
     features: {
       model: 'GPT-5-Nano (low-cost, low-latency)',
-      maxTokens: MAX_COMPLETION_TOKENS,
       robustValidation: true,
       healthMonitoring: true,
       retryLogic: true,
@@ -582,17 +543,10 @@ app.get('/', (_req, res) => {
         description: 'Sunucu sağlık durumunu kontrol eder',
       },
     },
-    documentation: 'https://github.com/your-repo/tripplan-api',
   });
 });
 
-// ═══════════════════════════════════════════════════════════════
-// ERROR HANDLING
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * 404 handler
- */
+// 404 handler
 app.use((_req, res) => {
   res.status(404).json({
     error: 'Endpoint bulunamadı',
@@ -600,9 +554,7 @@ app.use((_req, res) => {
   });
 });
 
-/**
- * Global error handler
- */
+// Global error handler
 app.use((err, _req, res, _next) => {
   console.error('💥 Unhandled error:', err);
 
@@ -615,17 +567,13 @@ app.use((err, _req, res, _next) => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════
 // SERVER START
-// ═══════════════════════════════════════════════════════════════
-
 app.listen(port, () => {
   console.log('\n' + '═'.repeat(60));
-  console.log('✅ TripPlan Backend v3.0 - ULTIMATE PRODUCTION');
+  console.log('✅ TripPlan Backend v3.1 - ULTIMATE PRODUCTION (no manual max tokens)');
   console.log('═'.repeat(60));
   console.log(`🌐 Server       : http://localhost:${port}`);
   console.log(`📦 Model        : ${MODEL_NAME}`);
-  console.log(`🎯 Max Tokens   : ${MAX_COMPLETION_TOKENS}`);
   console.log(`⏱️  Timeout      : ${OPENAI_TIMEOUT / 1000}s`);
   console.log(`📊 JSON Limit   : ${JSON_SIZE_LIMIT}`);
   console.log('═'.repeat(60));
@@ -634,14 +582,7 @@ app.listen(port, () => {
   console.log('   POST /api/plan/chat  - Planı güncelle');
   console.log('   GET  /api/test       - OpenAI test');
   console.log('   GET  /api/health     - Health check');
-  console.log('   GET  /              - API bilgisi');
-  console.log('═'.repeat(60));
-  console.log('⚡ Optimizations:');
-  console.log('   ✓ GPT-5-nano uyumlu');
-  console.log('   ✓ Robust koordinat validasyonu');
-  console.log('   ✓ Automatic retry logic');
-  console.log('   ✓ Memory monitoring');
-  console.log('   ✓ Request logging');
+  console.log('   GET  /               - API bilgisi');
   console.log('═'.repeat(60));
   console.log('🚀 Server hazır! Kullanıma başlayabilirsiniz.\n');
 });
