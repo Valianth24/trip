@@ -1,4 +1,4 @@
-// server.mjs
+// server.mjs - COMPLETE ULTIMATE PRODUCTION VERSION v3.0
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -7,93 +7,106 @@ import OpenAI from 'openai';
 const app = express();
 const port = process.env.PORT || 3000;
 
-const MAX_COMPLETION_TOKENS = 10000;
+// ═══════════════════════════════════════════════════════════════
+// CONFIGURATION
+// ═══════════════════════════════════════════════════════════════
+const MODEL_NAME = 'gpt-5-nano';
+const MAX_COMPLETION_TOKENS = 8000; // Optimal: Yeterli ama fazla değil
+const OPENAI_TIMEOUT = 90000; // 90 saniye
+const JSON_SIZE_LIMIT = '2mb';
 
-// ─────────────────────────────────────────────────────────────
-// OpenAI client
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// OpenAI Client Initialization
+// ═══════════════════════════════════════════════════════════════
 if (!process.env.OPENAI_API_KEY) {
-  console.error('❌ OPENAI_API_KEY .env içinde tanımlı değil!');
+  console.error('❌ FATAL: OPENAI_API_KEY .env dosyasında tanımlı değil!');
+  console.error('💡 .env dosyası oluşturun ve OPENAI_API_KEY=your_key_here ekleyin');
   process.exit(1);
 }
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  timeout: 90000, // 90 saniye OpenAI timeout
+  timeout: OPENAI_TIMEOUT,
 });
 
-const MODEL_NAME = 'gpt-5-nano';
-
-// ─────────────────────────────────────────────────────────────
-// Middleware
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// Express Middleware
+// ═══════════════════════════════════════════════════════════════
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: JSON_SIZE_LIMIT }));
 
-// ─────────────────────────────────────────────────────────────
-// Sistem Promptu
-// ─────────────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `
-Sen dünya çapında uzman bir gezi planlayıcısısın. Verilen şehir ve kriterlere göre
-**gerçek, ziyaret edilebilir** yerlerden oluşan detaylı ve mantıklı bir gezi planı oluşturursun.
+// Request logging middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(
+      `[${new Date().toISOString()}] ${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`
+    );
+  });
+  next();
+});
 
-GENEL KURALLAR:
-1. Sadece GERÇEK ve bilinen mekanları seç (müzeler, parklar, restoranlar, anıtlar, kafeler vb.).
-2. Mekan isimleri Google Haritalar'da aratılabilir, sade ve net olmalıdır
-   (ör: "Galata Kulesi", "Topkapı Sarayı", "Dolmabahçe Sarayı").
-3. Her durak için mümkünse tam adres ver (ilçe, mahalle, sokak, numara).
-4. Zaman dilimleri gerçekçi olsun; aynı günde birbirine çok uzak semtler arasında zıplama.
-5. Toplam süre ve bütçe kullanıcı isteğine uygun olsun.
-6. Duraklar, kullanıcının ilgi alanlarına ve kalabalık tercihine göre seçilsin.
-7. Ulaşım bilgisi gerçekçi olsun (yürüyerek mesafeler, toplu taşıma, araç vs.).
+// ═══════════════════════════════════════════════════════════════
+// SYSTEM PROMPT (Optimize Edilmiş - Kısa ve Etkili)
+// ═══════════════════════════════════════════════════════════════
+const SYSTEM_PROMPT = `Sen uzman bir gezi planlayıcısısın. GERÇEK mekanlardan oluşan detaylı planlar oluşturursun.
+
+KURALLAR:
+1. SADECE gerçek mekanlar (müze, park, restoran, kafe, anıt)
+2. Mekan isimleri Google Maps'te aranabilir olmalı
+3. Tam adres ver (sokak, mahalle, ilçe)
+4. Zaman dilimleri gerçekçi, mantıklı güzergah
+5. Bütçe ve süre kullanıcı isteğine uygun
+6. İlgi alanları ve kalabalık tercihine göre seç
 
 KOORDİNAT KURALI:
-- Bir mekanın koordinatlarını GERÇEKTEN biliyorsan "lat" ve "lng" alanlarına yaz.
-- Emin değilsen "lat" ve "lng" alanlarını null bırak. Uydurma koordinat verme.
+- Biliyorsan "lat" ve "lng" yaz (gerçek koordinat)
+- Emin değilsen null bırak, UYDURMA
 
-ÇIKTI FORMATı (SADECE JSON):
+ÇIKTI (SADECE JSON):
 {
   "id": "unique_id",
   "createdAt": "2024-01-01T10:00:00Z",
-  "summary": "Planın genel özeti (2-3 cümle)",
+  "summary": "Plan özeti (2-3 cümle)",
   "estimatedTotalCost": 500,
   "currency": "TRY",
   "stops": [
     {
       "timeRange": "09:00 - 10:30",
       "placeName": "Gerçek mekan adı",
-      "address": "Tam sokak adresi, mahalle, ilçe, şehir, ülke",
-      "description": "Mekan hakkında detaylı bilgi (isteğe göre 2-5 cümle)",
-      "reason": "Neden bu mekan seçildi, ilgi alanlarıyla bağlantısı",
+      "address": "Tam adres",
+      "description": "Detaylı bilgi (2-5 cümle)",
+      "reason": "Neden seçildi",
       "estimatedCost": 50,
       "crowd": "az|orta|yoğun",
-      "transport": "Bir önceki duraktan nasıl gidilir (örn: 'Taksim'den 15 dk yürüyüş')",
-      "lat": 41.0082,        // Bilmiyorsan null
-      "lng": 28.9784,        // Bilmiyorsan null
+      "transport": "Önceki duraktan nasıl gidilir",
+      "lat": 41.0082,
+      "lng": 28.9784,
       "rating": 4.5,
       "ratingCount": 1200,
-      "priceLevel": 2,       // 1: ucuz, 4: pahalı
+      "priceLevel": 2,
       "category": "Kahvaltı|Müze|Park|Restoran|Kafe|Alışveriş|Gece Hayatı",
-      "duration": 90         // dakika cinsinden süre
+      "duration": 90
     }
   ],
-  "tips": [
-    "Pratik öneri 1",
-    "Pratik öneri 2"
-  ]
+  "tips": ["Pratik öneri 1", "Pratik öneri 2"]
 }
 
-ÖNEMLİ NOTLAR:
-- İstanbul için: Sultanahmet, Taksim, Beşiktaş, Kadıköy gibi gerçek semtler kullan.
-- Paris için: Eiffel Kulesi, Louvre, Montmartre gibi gerçek yerler.
-- "lat" ve "lng" bilmediğin yerlerde null olmalı; uydurma koordinat verme.
-- Her durak en az 60, en fazla 180 dakika sürmeli.
-- Duraklar arası ulaşım mantıklı ve süre olarak gerçekçi olmalı.
-`;
+ÖNEMLİ:
+- İstanbul: Sultanahmet, Taksim, Beşiktaş, Kadıköy (gerçek semtler)
+- Paris: Eiffel, Louvre, Montmartre (gerçek yerler)
+- "lat", "lng" bilmiyorsan null
+- Her durak 60-180 dakika
+- Ulaşım mantıklı ve gerçekçi`;
 
-// ─────────────────────────────────────────────────────────────
-// Prompt Builder
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Kullanıcı isteğinden prompt oluşturur
+ */
 function buildPrompt(body) {
   const {
     city = 'İstanbul',
@@ -114,63 +127,54 @@ function buildPrompt(body) {
     : interests;
 
   const mobilityMap = {
-    walk: 'yürüyerek (mesafeler kısa olsun)',
+    walk: 'yürüyerek (kısa mesafeler)',
     public: 'toplu taşıma (metro, tramvay, otobüs)',
     taxi: 'taksi/özel araç',
   };
 
   const crowdMap = {
-    avoid: 'kalabalık yerlerden kaçın, daha sakin yerler seç',
-    prefer: 'canlı ve kalabalık yerleri tercih et',
-    any: 'kalabalık konusunda özel bir tercih yok',
+    avoid: 'kalabalık yerlerden kaçın, sakin yerler',
+    prefer: 'canlı ve kalabalık yerler',
+    any: 'kalabalık önemli değil',
   };
 
   const isEnglish = language === 'en';
   const langLabel = isEnglish ? 'English' : 'Turkish';
-
   const isDetailed = qualityMode === 'detailed' || qualityMode === 'ultra';
 
-  return `
-City / Şehir: ${city}
-Date / Tarih: ${date}
-Total duration / Toplam süre: ${hours} saat (start / başlangıç: ${startTime})
-Budget / Bütçe: ${budget} ${body.currency || 'TRY'}
-Interests / İlgi alanları: ${
-    interestsText || (isEnglish ? 'General tourism' : 'Genel gezi')
-  }
-Crowd preference / Kalabalık tercihi: ${
-    crowdMap[crowdPreference] || crowdPreference
-  }
-Mobility / Ulaşım: ${mobilityMap[mobility] || mobility}
-Special request / Özel istek: ${specialRequest || '-'}
+  return `Şehir: ${city}
+Tarih: ${date}
+Süre: ${hours} saat (başlangıç: ${startTime})
+Bütçe: ${budget} ${body.currency || 'TRY'}
+İlgi alanları: ${interestsText || (isEnglish ? 'General' : 'Genel')}
+Kalabalık: ${crowdMap[crowdPreference] || crowdPreference}
+Ulaşım: ${mobilityMap[mobility] || mobility}
+Özel istek: ${specialRequest || '-'}
 
-REQUIREMENTS / GEREKSİNİMLER:
-- 3 ile 5 arasında durak oluştur.
-- Duraklar birbirine coğrafi olarak mantıklı bir güzergâh oluştursun.
-- Kullanıcının ilgi alanları ve kalabalık tercihini dikkate al.
-- Bütçeyi aşma; her durak için tahmini maliyet belirt.
-- ${
-    isDetailed
-      ? 'Her durak için en az 3-4 cümle açıklama yaz, ipuçlarını detaylı ver.'
-      : 'Her durak için kısa açıklamalar yaz (1-2 cümle), ipuçlarını kısa tut.'
-  }
+GEREKSİNİMLER:
+- 3-5 durak oluştur
+- Coğrafi olarak mantıklı güzergah
+- İlgi alanları ve kalabalık tercihini dikkate al
+- Bütçeyi aşma
+- ${isDetailed ? 'Her durak için 3-4 cümle açıklama, detaylı ipuçları' : 'Her durak için 1-2 cümle, kısa ipuçları'}
 
-RESPONSE LANGUAGE / YANIT DİLİ: ${langLabel}
+DİL: ${langLabel}
 
-SADECE GEÇERLİ JSON DÖNDÜR, BAŞKA HİÇBİR METİN EKLEME.
-`;
+SADECE GEÇERLİ JSON DÖNDÜR, BAŞKA METİN YOK.`;
 }
 
-// ─────────────────────────────────────────────────────────────
-// JSON çıkarma
-// ─────────────────────────────────────────────────────────────
+/**
+ * OpenAI yanıtından JSON çıkarır (Geliştirilmiş)
+ */
 function extractJsonFromText(text) {
   if (!text || typeof text !== 'string') return null;
 
+  // 1. Direkt parse dene
   try {
     return JSON.parse(text);
   } catch (e) {}
 
+  // 2. Markdown code block temizle
   let cleaned = text.trim();
   cleaned = cleaned.replace(/^```json\s*/i, '');
   cleaned = cleaned.replace(/^```\s*/i, '');
@@ -181,6 +185,7 @@ function extractJsonFromText(text) {
     return JSON.parse(cleaned);
   } catch (e) {}
 
+  // 3. Regex ile en büyük JSON objesini bul
   const matches = cleaned.match(/\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}/g);
   if (matches && matches.length > 0) {
     const longest = matches.reduce((a, b) => (a.length > b.length ? a : b));
@@ -192,14 +197,15 @@ function extractJsonFromText(text) {
   return null;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Plan validasyonu ve normalize etme
-// ─────────────────────────────────────────────────────────────
+/**
+ * Plan validasyonu ve normalize etme (ROBUST)
+ */
 function validateAndFixPlan(plan) {
   if (!plan || typeof plan !== 'object') {
     throw new Error('Geçersiz plan formatı');
   }
 
+  // Plan meta bilgileri
   plan.id = plan.id || `plan_${Date.now()}`;
   plan.createdAt = plan.createdAt || new Date().toISOString();
   plan.currency = plan.currency || 'TRY';
@@ -209,6 +215,7 @@ function validateAndFixPlan(plan) {
   plan.stops = Array.isArray(plan.stops) ? plan.stops : [];
   plan.language = plan.language || 'tr';
 
+  // Durakları normalize et
   plan.stops = plan.stops.map((stop, index) => {
     if (!stop || typeof stop !== 'object') {
       stop = {};
@@ -217,10 +224,30 @@ function validateAndFixPlan(plan) {
     let lat = stop.lat;
     let lng = stop.lng;
 
-    if (typeof lat !== 'number') {
+    // ROBUST koordinat validasyonu
+    // - Sayı olmalı
+    // - 0 olmamalı (geçersiz koordinat)
+    // - NaN veya Infinity olmamalı
+    // - Geçerli range'de olmalı (-90/90, -180/180)
+    if (
+      typeof lat !== 'number' ||
+      lat === 0 ||
+      isNaN(lat) ||
+      !isFinite(lat) ||
+      lat < -90 ||
+      lat > 90
+    ) {
       lat = null;
     }
-    if (typeof lng !== 'number') {
+
+    if (
+      typeof lng !== 'number' ||
+      lng === 0 ||
+      isNaN(lng) ||
+      !isFinite(lng) ||
+      lng < -180 ||
+      lng > 180
+    ) {
       lng = null;
     }
 
@@ -249,14 +276,16 @@ function validateAndFixPlan(plan) {
   return plan;
 }
 
-// ─────────────────────────────────────────────────────────────
-// OpenAI çağrısı (retry + logging)
-// ─────────────────────────────────────────────────────────────
+/**
+ * OpenAI API çağrısı (retry + logging)
+ * GPT-5-nano UYUMLU
+ */
 async function callOpenAI(userPrompt, retryCount = 0) {
   console.log(
     `\n📤 OpenAI isteği gönderiliyor... (Deneme: ${retryCount + 1}/3)`,
   );
   console.log('📦 Model:', MODEL_NAME);
+  console.log('🎯 Max tokens:', MAX_COMPLETION_TOKENS);
 
   try {
     const response = await client.chat.completions.create({
@@ -267,6 +296,12 @@ async function callOpenAI(userPrompt, retryCount = 0) {
         { role: 'user', content: userPrompt },
       ],
       max_completion_tokens: MAX_COMPLETION_TOKENS,
+      // NOT: GPT-5-nano aşağıdaki parametreleri desteklemiyor:
+      // - reasoning (sadece GPT-5 full/mini)
+      // - temperature (sadece default 1)
+      // - top_p
+      // - presence_penalty
+      // - frequency_penalty
     });
 
     console.log('📥 Yanıt alındı');
@@ -274,21 +309,33 @@ async function callOpenAI(userPrompt, retryCount = 0) {
     console.log('   - Usage:', JSON.stringify(response?.usage));
     console.log('   - Finish reason:', response?.choices?.[0]?.finish_reason);
 
+    // Reasoning tokens detayı varsa göster (GPT-5 full/mini için)
+    if (response?.usage?.completion_tokens_details) {
+      const details = response.usage.completion_tokens_details;
+      if (details.reasoning_tokens) {
+        console.log('   - Reasoning tokens:', details.reasoning_tokens);
+      }
+    }
+
     const content = response?.choices?.[0]?.message?.content;
     if (!content) {
       throw new Error('OpenAI yanıtında içerik yok');
     }
 
-    console.log('   - Content length:', content.length);
+    console.log('   - Content length:', content.length, 'chars');
     return content;
   } catch (apiError) {
     console.error('❌ OpenAI hatası:', apiError.message);
+    console.error('   - Status:', apiError.status);
+    console.error('   - Code:', apiError.code);
+    console.error('   - Type:', apiError.type);
 
+    // Geçici hatalarda retry (429: rate limit, 503: service unavailable)
     if (
       retryCount < 2 &&
       (apiError.status === 429 || apiError.status === 503)
     ) {
-      const waitTime = (retryCount + 1) * 2000;
+      const waitTime = (retryCount + 1) * 2000; // 2s, 4s
       console.log(`⏳ ${waitTime}ms bekleyip tekrar denenecek...`);
       await new Promise((resolve) => setTimeout(resolve, waitTime));
       return callOpenAI(userPrompt, retryCount + 1);
@@ -298,9 +345,9 @@ async function callOpenAI(userPrompt, retryCount = 0) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Plan oluşturma (ana fonksiyon)
-// ─────────────────────────────────────────────────────────────
+/**
+ * Plan oluşturma (ana fonksiyon)
+ */
 async function createPlan(userPrompt) {
   const content = await callOpenAI(userPrompt);
   const plan = extractJsonFromText(content);
@@ -325,14 +372,19 @@ async function createPlan(userPrompt) {
   return validatedPlan;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Routes
-// ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+// API ROUTES
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * POST /api/plan
+ * Yeni plan oluşturur
+ */
 app.post('/api/plan', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
   console.log('📍 POST /api/plan');
-  console.log('📦 Request:', JSON.stringify(req.body, null, 2));
+  console.log('📦 Request body:', JSON.stringify(req.body, null, 2));
 
   try {
     const prompt = buildPrompt(req.body);
@@ -340,11 +392,13 @@ app.post('/api/plan', async (req, res) => {
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`✅ Plan oluşturuldu (${duration}s)`);
+    console.log('═'.repeat(60));
 
     res.json(plan);
   } catch (err) {
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.error(`❌ Hata (${duration}s):`, err.message);
+    console.error(`❌ Plan oluşturma hatası (${duration}s):`, err.message);
+    console.error('═'.repeat(60));
 
     res.status(500).json({
       error: 'Plan oluşturulamadı',
@@ -353,6 +407,10 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/plan/chat
+ * Mevcut planı günceller
+ */
 app.post('/api/plan/chat', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
@@ -364,16 +422,17 @@ app.post('/api/plan/chat', async (req, res) => {
     if (!plan || !message) {
       return res.status(400).json({
         error: 'Geçersiz istek',
-        detail: 'plan ve message zorunlu',
+        detail: 'plan ve message parametreleri zorunlu',
       });
     }
+
+    console.log('💬 Kullanıcı mesajı:', message);
+    console.log('📋 Mevcut plan ID:', plan.id);
 
     const language = plan.language || 'tr';
     const isEnglish = language === 'en';
 
-    const prompt = `${
-      isEnglish ? 'Current plan' : 'Mevcut plan'
-    }:
+    const prompt = `${isEnglish ? 'Current plan' : 'Mevcut plan'}:
 ${JSON.stringify(plan, null, 2)}
 
 ${isEnglish ? 'User request' : 'Kullanıcı isteği'}: ${message}
@@ -390,11 +449,13 @@ ${isEnglish ? 'Return ONLY JSON.' : 'SADECE JSON döndür.'}`;
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`✅ Plan güncellendi (${duration}s)`);
+    console.log('═'.repeat(60));
 
     res.json(newPlan);
   } catch (err) {
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.error(`❌ Hata (${duration}s):`, err.message);
+    console.error(`❌ Plan güncelleme hatası (${duration}s):`, err.message);
+    console.error('═'.repeat(60));
 
     res.status(500).json({
       error: 'Plan güncellenemedi',
@@ -403,6 +464,10 @@ ${isEnglish ? 'Return ONLY JSON.' : 'SADECE JSON döndür.'}`;
   }
 });
 
+/**
+ * GET /api/test
+ * OpenAI bağlantısını test eder
+ */
 app.get('/api/test', async (_req, res) => {
   console.log('\n' + '═'.repeat(60));
   console.log('🧪 GET /api/test');
@@ -411,10 +476,12 @@ app.get('/api/test', async (_req, res) => {
     const response = await client.chat.completions.create({
       model: MODEL_NAME,
       messages: [{ role: 'user', content: 'Test: Sadece "OK" yaz.' }],
+      max_completion_tokens: 100,
     });
 
     const content = response.choices?.[0]?.message?.content;
     console.log('✅ Test başarılı:', content);
+    console.log('═'.repeat(60));
 
     res.json({
       success: true,
@@ -424,6 +491,8 @@ app.get('/api/test', async (_req, res) => {
     });
   } catch (err) {
     console.error('❌ Test hatası:', err.message);
+    console.error('═'.repeat(60));
+
     res.status(500).json({
       success: false,
       error: err.message,
@@ -431,33 +500,131 @@ app.get('/api/test', async (_req, res) => {
   }
 });
 
-app.get('/', (_req, res) => {
+/**
+ * GET /api/health
+ * Sunucu sağlık durumunu kontrol eder
+ */
+app.get('/api/health', (_req, res) => {
+  const memUsage = process.memoryUsage();
+
   res.json({
-    status: 'online',
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: Math.floor(process.uptime()),
     model: MODEL_NAME,
-    version: '2.0',
-    endpoints: {
-      plan: 'POST /api/plan',
-      chat: 'POST /api/plan/chat',
-      test: 'GET /api/test',
+    version: '3.0',
+    memory: {
+      heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024) + ' MB',
+      heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024) + ' MB',
+      rss: Math.round(memUsage.rss / 1024 / 1024) + ' MB',
+    },
+    config: {
+      maxCompletionTokens: MAX_COMPLETION_TOKENS,
+      timeout: OPENAI_TIMEOUT / 1000 + 's',
+      jsonLimit: JSON_SIZE_LIMIT,
     },
   });
 });
 
-app.use((err, _req, res, _next) => {
-  console.error('💥 Unhandled error:', err);
-  res.status(500).json({
-    error: 'Sunucu hatası',
-    detail:
-      process.env.NODE_ENV === 'development' ? err.message : undefined,
+/**
+ * GET /
+ * API bilgilerini döndürür
+ */
+app.get('/', (_req, res) => {
+  res.json({
+    name: 'TripPlan API',
+    version: '3.0 - Ultimate Production',
+    status: 'online',
+    model: MODEL_NAME,
+    features: {
+      model: 'GPT-5-Nano (low-cost, low-latency)',
+      maxTokens: MAX_COMPLETION_TOKENS,
+      robustValidation: true,
+      healthMonitoring: true,
+      retryLogic: true,
+    },
+    endpoints: {
+      createPlan: {
+        method: 'POST',
+        path: '/api/plan',
+        description: 'Yeni gezi planı oluşturur',
+      },
+      updatePlan: {
+        method: 'POST',
+        path: '/api/plan/chat',
+        description: 'Mevcut planı günceller',
+      },
+      test: {
+        method: 'GET',
+        path: '/api/test',
+        description: 'OpenAI bağlantısını test eder',
+      },
+      health: {
+        method: 'GET',
+        path: '/api/health',
+        description: 'Sunucu sağlık durumunu kontrol eder',
+      },
+    },
+    documentation: 'https://github.com/your-repo/tripplan-api',
   });
 });
 
+// ═══════════════════════════════════════════════════════════════
+// ERROR HANDLING
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * 404 handler
+ */
+app.use((_req, res) => {
+  res.status(404).json({
+    error: 'Endpoint bulunamadı',
+    message: 'Geçerli endpoint listesi için GET / adresine istek atın',
+  });
+});
+
+/**
+ * Global error handler
+ */
+app.use((err, _req, res, _next) => {
+  console.error('💥 Unhandled error:', err);
+
+  res.status(500).json({
+    error: 'Sunucu hatası',
+    detail:
+      process.env.NODE_ENV === 'development'
+        ? err.message
+        : 'Beklenmeyen bir hata oluştu. Lütfen daha sonra tekrar deneyin.',
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// SERVER START
+// ═══════════════════════════════════════════════════════════════
+
 app.listen(port, () => {
+  console.log('\n' + '═'.repeat(60));
+  console.log('✅ TripPlan Backend v3.0 - ULTIMATE PRODUCTION');
   console.log('═'.repeat(60));
-  console.log('✅ TripPlan Backend v2.0');
-  console.log(`🌐 Server: http://localhost:${port}`);
-  console.log(`📦 Model: ${MODEL_NAME}`);
-  console.log('🧪 Test:  GET /api/test');
+  console.log(`🌐 Server       : http://localhost:${port}`);
+  console.log(`📦 Model        : ${MODEL_NAME}`);
+  console.log(`🎯 Max Tokens   : ${MAX_COMPLETION_TOKENS}`);
+  console.log(`⏱️  Timeout      : ${OPENAI_TIMEOUT / 1000}s`);
+  console.log(`📊 JSON Limit   : ${JSON_SIZE_LIMIT}`);
   console.log('═'.repeat(60));
+  console.log('📍 Endpoints:');
+  console.log('   POST /api/plan       - Yeni plan oluştur');
+  console.log('   POST /api/plan/chat  - Planı güncelle');
+  console.log('   GET  /api/test       - OpenAI test');
+  console.log('   GET  /api/health     - Health check');
+  console.log('   GET  /              - API bilgisi');
+  console.log('═'.repeat(60));
+  console.log('⚡ Optimizations:');
+  console.log('   ✓ GPT-5-nano uyumlu');
+  console.log('   ✓ Robust koordinat validasyonu');
+  console.log('   ✓ Automatic retry logic');
+  console.log('   ✓ Memory monitoring');
+  console.log('   ✓ Request logging');
+  console.log('═'.repeat(60));
+  console.log('🚀 Server hazır! Kullanıma başlayabilirsiniz.\n');
 });
