@@ -248,11 +248,11 @@ function validateAndFixPlan(plan) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// OpenAI çağrısı (retry + logging, max_tokens: 10000)
+// OpenAI çağrısı (retry + logging)
 // ─────────────────────────────────────────────────────────────
 async function callOpenAI(userPrompt, retryCount = 0) {
   console.log(
-    `\n📤 OpenAI isteği gönderiliyor... (Deneme: ${retryCount + 1}/3)`
+    `\n📤 OpenAI isteği gönderiliyor... (Deneme: ${retryCount + 1}/3)`,
   );
   console.log('📦 Model:', MODEL_NAME);
 
@@ -265,7 +265,8 @@ async function callOpenAI(userPrompt, retryCount = 0) {
         { role: 'user', content: userPrompt },
       ],
       temperature: 0.55,
-      max_tokens: 10000, // ⬅️ BURAYI YÜKSELTTİK
+      // 🔥 BURASI DEĞİŞTİ: max_tokens yerine max_completion_tokens
+      max_completion_tokens: 10000,
     });
 
     console.log('📥 Yanıt alındı');
@@ -315,7 +316,7 @@ async function createPlan(userPrompt) {
   console.log('✅ Plan hazır');
   console.log(`   - Durak sayısı: ${validatedPlan.stops.length}`);
   console.log(
-    `   - Toplam maliyet: ${validatedPlan.estimatedTotalCost} ${validatedPlan.currency}`
+    `   - Toplam maliyet: ${validatedPlan.estimatedTotalCost} ${validatedPlan.currency}`,
   );
   if (validatedPlan.stops[0]) {
     console.log(`   - İlk durak: ${validatedPlan.stops[0].placeName}`);
@@ -327,6 +328,8 @@ async function createPlan(userPrompt) {
 // ─────────────────────────────────────────────────────────────
 // Routes
 // ─────────────────────────────────────────────────────────────
+
+// POST /api/plan
 app.post('/api/plan', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
@@ -352,6 +355,7 @@ app.post('/api/plan', async (req, res) => {
   }
 });
 
+// POST /api/plan/chat (revize)
 app.post('/api/plan/chat', async (req, res) => {
   const startTime = Date.now();
   console.log('\n' + '═'.repeat(60));
@@ -402,6 +406,7 @@ ${isEnglish ? 'Return ONLY JSON.' : 'SADECE JSON döndür.'}`;
   }
 });
 
+// GET /api/test
 app.get('/api/test', async (_req, res) => {
   console.log('\n' + '═'.repeat(60));
   console.log('🧪 GET /api/test');
@@ -430,6 +435,7 @@ app.get('/api/test', async (_req, res) => {
   }
 });
 
+// GET /
 app.get('/', (_req, res) => {
   res.json({
     status: 'online',
